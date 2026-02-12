@@ -1,103 +1,100 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Captain's Backlog</title>
-<link rel="stylesheet" href="styles.css">
-</head>
-<body>
-
-<header>
-  <h1>📋 Captain's Backlog</h1>
-  <div class="header-actions">
-    <span class="file-status" id="fileStatus">No file linked</span>
-    <button class="btn" onclick="openFile()" id="btnOpen">📂 Open</button>
-    <button class="btn" onclick="saveFile()" id="btnSave">💾 Save</button>
-    <button class="btn" onclick="saveFileAs()">Save As</button>
-    <button class="btn" onclick="toggleSettings()">⚙ Sort</button>
-    <button class="btn btn-accent" onclick="openModal('backlog')">+ Add Task</button>
-  </div>
-</header>
-
-<div class="settings-panel hidden" id="settingsPanel">
-  <h3>Backlog Auto-Sort</h3>
-  <p style="font-size:0.72rem;color:var(--text-dim);margin-bottom:0.5rem;">
-    Tasks in the Backlog column are automatically sorted by these criteria. Other columns use manual drag ordering.
-  </p>
-  <div id="sortRules"></div>
-  <button class="btn add-sort-btn" onclick="addSortRule()">+ Add rule</button>
-  <div class="autosave-note">
-    💡 Tip: Use Ctrl+S to quick-save at any time. Changes are highlighted until saved.
-  </div>
-</div>
-
-<div class="board" id="board"></div>
-
-<!-- Add/Edit Modal -->
-<div class="modal-overlay hidden" id="modal">
-  <div class="modal">
-    <h2 id="modalTitle">Add Task</h2>
-    <label>Title *</label>
-    <input type="text" id="taskTitle" placeholder="Task title...">
-    <label>Description</label>
-    <textarea id="taskDesc" placeholder="Optional description..."></textarea>
-    <div class="form-row">
-      <div>
-        <label>Priority</label>
-        <select id="taskPriority">
-          <option value="none">None</option>
-          <option value="low">Low</option>
-          <option value="medium" selected>Medium</option>
-          <option value="high">High</option>
-          <option value="critical">Critical</option>
-        </select>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Captain's Backlog</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>🧭 Captain's Backlog</h1>
+      <div class="header-actions">
+        <span class="file-status" id="fileStatus">No file linked</span>
+        <button class="btn" onclick="openFile()" id="btnOpen">📂 Open</button>
+        <button class="btn" onclick="saveFile()" id="btnSave">💾 Save</button>
+        <button class="btn" onclick="saveFileAs()">Save As</button>
+        <button class="btn" onclick="toggleSettings()">⚙ Sort</button>
+        <button class="btn btn-accent" onclick="openModal('backlog')">+ Add Task</button>
       </div>
-      <div>
-        <label>Effort</label>
-        <select id="taskEffort">
-          <option value="">None</option>
-          <option value="XS">XS</option>
-          <option value="S">S</option>
-          <option value="M" selected>M</option>
-          <option value="L">L</option>
-          <option value="XL">XL</option>
-        </select>
+    </header>
+
+    <div class="settings-panel hidden" id="settingsPanel">
+      <h3>Backlog Auto-Sort</h3>
+      <p style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 0.5rem">
+        Tasks in the Backlog column are automatically sorted by these criteria. Other columns use manual drag ordering.
+      </p>
+      <div id="sortRules"></div>
+      <button class="btn add-sort-btn" onclick="addSortRule()">+ Add rule</button>
+      <div class="autosave-note">💡 Tip: Use Ctrl+S to quick-save at any time. Changes are highlighted until saved.</div>
+    </div>
+
+    <div class="board" id="board"></div>
+
+    <!-- Add/Edit Modal -->
+    <div class="modal-overlay hidden" id="modal">
+      <div class="modal">
+        <h2 id="modalTitle">Add Task</h2>
+        <label>Title *</label>
+        <input type="text" id="taskTitle" placeholder="Task title..." />
+        <label>Description</label>
+        <textarea id="taskDesc" placeholder="Optional description..."></textarea>
+        <div class="form-row">
+          <div>
+            <label>Priority</label>
+            <select id="taskPriority">
+              <option value="none">None</option>
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div>
+            <label>Effort</label>
+            <select id="taskEffort">
+              <option value="">None</option>
+              <option value="0.5">0.5</option>
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="4">4</option>
+              <option value="8">8</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Due Date</label>
+            <input type="date" id="taskDue" />
+          </div>
+          <div>
+            <label>Column</label>
+            <select id="taskStatus"></select>
+          </div>
+        </div>
+        <label>Tags (comma separated)</label>
+        <input type="text" id="taskTags" placeholder="e.g. bug, frontend, api" />
+        <div class="modal-actions">
+          <button class="btn" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-accent" id="modalSave" onclick="saveTask()">Add</button>
+        </div>
       </div>
     </div>
-    <div class="form-row">
-      <div>
-        <label>Due Date</label>
-        <input type="date" id="taskDue">
-      </div>
-      <div>
-        <label>Column</label>
-        <select id="taskStatus"></select>
-      </div>
-    </div>
-    <label>Tags (comma separated)</label>
-    <input type="text" id="taskTags" placeholder="e.g. bug, frontend, api">
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-accent" id="modalSave" onclick="saveTask()">Add</button>
-    </div>
-  </div>
-</div>
 
-<!-- View Task Modal -->
-<div class="modal-overlay hidden" id="viewModal">
-  <div class="modal">
-    <h2 id="viewTitle"></h2>
-    <div class="view-desc" id="viewDesc"></div>
-    <div class="view-details" id="viewDetails"></div>
-    <div class="view-tags" id="viewTags"></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeViewModal()">Close</button>
-      <button class="btn btn-accent" id="viewEditBtn">Edit</button>
+    <!-- View Task Modal -->
+    <div class="modal-overlay hidden" id="viewModal">
+      <div class="modal">
+        <h2 id="viewTitle"></h2>
+        <div class="view-desc" id="viewDesc"></div>
+        <div class="view-details" id="viewDetails"></div>
+        <div class="view-tags" id="viewTags"></div>
+        <div class="modal-actions">
+          <button class="btn" onclick="closeViewModal()">Close</button>
+          <button class="btn btn-accent" id="viewEditBtn">Edit</button>
+        </div>
+      </div>
     </div>
-  </div>
-</div>
 
-<script src="app.js"></script>
-</body>
+    <script src="app.js"></script>
+  </body>
 </html>

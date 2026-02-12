@@ -1,31 +1,34 @@
 const COLUMNS = [
   { id: 'backlog', title: 'Backlog', color: 'var(--col-backlog)' },
-  { id: 'in-progress', title: 'In Progress', color: 'var(--col-progress)' },
-  { id: 'review', title: 'Review', color: 'var(--col-review)' },
-  { id: 'done', title: 'Done', color: 'var(--col-done)' },
+  { id: 'today', title: 'Today', color: 'var(--col-progress)' },
+  { id: 'in-progress', title: 'In Progress', color: 'var(--col-review)' },
+  { id: 'done', title: 'Done', color: 'var(--col-done)' }
 ];
 
 const PRIORITIES = { critical: 0, high: 1, medium: 2, low: 3, none: 4 };
-const EFFORTS = { XS: 0, S: 1, M: 2, L: 3, XL: 4 };
+const EFFORTS = { 0.5: 0, 1: 1, 2: 2, 4: 3, 8: 4 };
 const SORT_FIELDS = [
-  { id: 'priority', label: 'Priority' },
   { id: 'due', label: 'Due Date' },
+  { id: 'priority', label: 'Priority' },
   { id: 'effort', label: 'Effort (smallest first)' },
   { id: 'created', label: 'Date Created' },
-  { id: 'title', label: 'Title (A-Z)' },
+  { id: 'title', label: 'Title (A-Z)' }
 ];
 
 let data = {
   tasks: [],
   sortRules: [
-    { field: 'priority', dir: 'asc' },
     { field: 'due', dir: 'asc' },
-  ],
+    { field: 'priority', dir: 'asc' }
+  ]
 };
 
 let fileHandle = null;
 let dirty = false;
 let editingId = null;
+let showAllDone = false;
+const DONE_DAYS = 30;
+let columnTagFilters = {}; // { columnId: ['tag1', 'tag2'] }
 
 // ── File System Access API ──
 
@@ -39,7 +42,7 @@ async function openFile() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
-    input.onchange = async e => {
+    input.onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
       try {
@@ -47,7 +50,9 @@ async function openFile() {
         loadJSON(text);
         fileHandle = null;
         updateFileStatus(file.name + ' (read-only, use Save As)');
-      } catch (err) { alert('Failed to read file: ' + err.message); }
+      } catch (err) {
+        alert('Failed to read file: ' + err.message);
+      }
     };
     input.click();
     return;
@@ -55,12 +60,14 @@ async function openFile() {
 
   try {
     const [handle] = await window.showOpenFilePicker({
-      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
     });
     fileHandle = handle;
+    storeHandle(handle);
     const file = await handle.getFile();
     const text = await file.text();
     loadJSON(text);
+    autoSave();
     updateFileStatus(file.name);
   } catch (err) {
     if (err.name !== 'AbortError') alert('Open failed: ' + err.message);
@@ -97,14 +104,57 @@ async function saveFileAs() {
 
   try {
     fileHandle = await window.showSaveFilePicker({
-      suggestedName: 'kanban-data.json',
-      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+      suggestedName: 'data.json',
+      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
     });
+    storeHandle(fileHandle);
     await saveFile();
   } catch (err) {
     if (err.name !== 'AbortError') alert('Save failed: ' + err.message);
   }
 }
+
+// ── Auto-save (localStorage + debounced file write) ──
+
+const STORAGE_KEY = 'kandone-data';
+let saveTimer = null;
+
+function autoSave() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  if (fileHandle) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveFile(), 500);
+  }
+}
+
+// ── IndexedDB handle persistence ──
+
+function storeHandle(handle) {
+  const req = indexedDB.open('kandone', 1);
+  req.onupgradeneeded = (e) => e.target.result.createObjectStore('handles');
+  req.onsuccess = (e) => {
+    const db = e.target.result;
+    const tx = db.transaction('handles', 'readwrite');
+    tx.objectStore('handles').put(handle, 'file');
+  };
+}
+
+async function restoreHandle() {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('kandone', 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore('handles');
+    req.onsuccess = (e) => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readonly');
+      const get = tx.objectStore('handles').get('file');
+      get.onsuccess = () => resolve(get.result || null);
+      get.onerror = () => resolve(null);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+// ── Data loading ──
 
 function loadJSON(text) {
   try {
@@ -118,16 +168,18 @@ function loadJSON(text) {
     dirty = false;
     render();
     renderSortRules();
-  } catch { alert('Invalid JSON file.'); }
+  } catch {
+    alert('Invalid JSON file.');
+  }
 }
 
 function updateFileStatus(name) {
   const el = document.getElementById('fileStatus');
   if (!name) {
-    el.textContent = 'No file linked';
-    el.className = 'file-status';
+    el.textContent = '✓ Auto-saved';
+    el.className = 'file-status linked';
   } else if (dirty) {
-    el.textContent = '● ' + name + ' (unsaved)';
+    el.textContent = '● ' + name + ' (syncing)';
     el.className = 'file-status unsaved';
   } else {
     el.textContent = '✓ ' + name;
@@ -138,6 +190,7 @@ function updateFileStatus(name) {
 function markDirty() {
   dirty = true;
   updateFileStatus(fileHandle ? fileHandle.name : null);
+  autoSave();
 }
 
 // ── Sorting ──
@@ -156,7 +209,8 @@ function sortBacklog(tasks) {
           cmp = (PRIORITIES[a.priority || 'none'] ?? 4) - (PRIORITIES[b.priority || 'none'] ?? 4);
           break;
         case 'due':
-          const da = a.due || '9999-12-31', db = b.due || '9999-12-31';
+          const da = a.due || '9999-12-31',
+            db = b.due || '9999-12-31';
           cmp = da.localeCompare(db);
           break;
         case 'effort':
@@ -183,7 +237,7 @@ function renderSortRules() {
     div.className = 'sort-rule';
     div.innerHTML = `
       <select onchange="updateSortField(${i}, this.value)">
-        ${SORT_FIELDS.map(f => `<option value="${f.id}" ${f.id === rule.field ? 'selected' : ''}>${f.label}</option>`).join('')}
+        ${SORT_FIELDS.map((f) => `<option value="${f.id}" ${f.id === rule.field ? 'selected' : ''}>${f.label}</option>`).join('')}
       </select>
       <select onchange="updateSortDir(${i}, this.value)">
         <option value="asc" ${rule.dir === 'asc' ? 'selected' : ''}>Asc</option>
@@ -225,6 +279,27 @@ function toggleSettings() {
   document.getElementById('settingsPanel').classList.toggle('hidden');
 }
 
+// ── Tag filtering ──
+
+function getAllTags() {
+  const tags = new Set();
+  data.tasks.forEach((t) => (t.tags || []).forEach((tag) => tags.add(tag)));
+  return [...tags].sort((a, b) => a.localeCompare(b));
+}
+
+function toggleTagFilter(colId, tag) {
+  if (!columnTagFilters[colId]) columnTagFilters[colId] = [];
+  const idx = columnTagFilters[colId].indexOf(tag);
+  if (idx >= 0) columnTagFilters[colId].splice(idx, 1);
+  else columnTagFilters[colId].push(tag);
+  render();
+}
+
+function clearTagFilters(colId) {
+  delete columnTagFilters[colId];
+  render();
+}
+
 // ── Rendering ──
 
 function uid() {
@@ -237,16 +312,34 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function formatDate(isoDate) {
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
 function dueBadge(due) {
   if (!due) return '';
-  const now = new Date(); now.setHours(0,0,0,0);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
   const d = new Date(due + 'T00:00:00');
   const diff = Math.floor((d - now) / 86400000);
   let cls = '';
   if (diff < 0) cls = 'overdue';
   else if (diff <= 3) cls = 'soon';
-  const label = diff < 0 ? `${-diff}d overdue` : diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : due;
-  return `<span class="due-badge ${cls}">📅 ${label}</span>`;
+
+  const dayOfWeek = now.getDay();
+  const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+
+  let label;
+  if (diff < 0) label = `${-diff}d overdue`;
+  else if (diff === 0) label = 'Today';
+  else if (diff === 1) label = 'Tomorrow';
+  else if (diff <= daysUntilSunday) label = 'This week';
+  else if (diff <= daysUntilSunday + 7) label = 'Next week';
+  else label = formatDate(due);
+
+  const tooltip = diff >= 0 && diff > 1 ? ` title="${formatDate(due)}"` : '';
+  return `<span class="due-badge ${cls}"${tooltip}>📅 ${label}</span>`;
 }
 
 function priBadge(pri) {
@@ -259,8 +352,8 @@ function render() {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
-  COLUMNS.forEach(col => {
-    let colTasks = data.tasks.filter(t => t.status === col.id);
+  COLUMNS.forEach((col) => {
+    let colTasks = data.tasks.filter((t) => t.status === col.id);
 
     // Auto-sort backlog, manual order for others
     if (col.id === 'backlog') {
@@ -269,64 +362,104 @@ function render() {
       colTasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     }
 
+    // Filter by active tag filters
+    const activeFilters = columnTagFilters[col.id] || [];
+    if (activeFilters.length > 0) {
+      colTasks = colTasks.filter((t) => activeFilters.every((tag) => (t.tags || []).includes(tag)));
+    }
+
+    // Filter Done column to recent tasks
+    let hiddenDoneCount = 0;
+    if (col.id === 'done' && !showAllDone) {
+      const cutoff = Date.now() - DONE_DAYS * 86400000;
+      const allDone = colTasks;
+      colTasks = allDone.filter((t) => (t.completedAt || t.created || 0) >= cutoff);
+      hiddenDoneCount = allDone.length - colTasks.length;
+    }
+
     const colEl = document.createElement('div');
     colEl.className = 'column';
+    const effortSum = col.id === 'today' ? colTasks.reduce((sum, t) => sum + (parseFloat(t.effort) || 0), 0) : null;
+    const totalCount = col.id === 'done' && hiddenDoneCount > 0 ? `${colTasks.length}/${colTasks.length + hiddenDoneCount}` : `${colTasks.length}`;
+
     colEl.innerHTML = `
       <div class="column-header">
         <span class="column-title">
           <span class="column-dot" style="background:${col.color}"></span>
           ${col.title}
         </span>
-        <span class="column-count">${colTasks.length}</span>
+        <span class="column-header-right">
+          ${effortSum !== null ? `<span class="column-effort-sum">${effortSum}</span>` : ''}
+          <span class="column-count">${totalCount}</span>
+        </span>
       </div>
-      ${col.id === 'backlog' && data.sortRules.length
-        ? `<div class="sort-info">Sorted by: ${data.sortRules.map(r => SORT_FIELDS.find(f=>f.id===r.field)?.label).join(' → ')}</div>`
-        : ''}
+      ${
+        col.id === 'backlog' && data.sortRules.length
+          ? `<div class="sort-info">Sorted by: ${data.sortRules.map((r) => SORT_FIELDS.find((f) => f.id === r.field)?.label).join(' → ')}</div>`
+          : ''
+      }
+      ${
+        activeFilters.length
+          ? `<div class="tag-filter-bar">
+              ${activeFilters.map((tag) => `<span class="tag-filter-badge" data-col="${col.id}" data-tag="${esc(tag)}">${esc(tag)} <button class="tag-filter-remove">✕</button></span>`).join('')}
+              <button class="tag-filter-clear" data-col="${col.id}">Clear all</button>
+            </div>`
+          : ''
+      }
     `;
 
     const body = document.createElement('div');
     body.className = 'column-body';
     body.dataset.column = col.id;
 
-    body.addEventListener('dragover', e => {
+    body.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       body.classList.add('drag-over');
     });
     body.addEventListener('dragleave', () => body.classList.remove('drag-over'));
-    body.addEventListener('drop', e => {
+    body.addEventListener('drop', (e) => {
       e.preventDefault();
       body.classList.remove('drag-over');
       const id = e.dataTransfer.getData('text/plain');
-      const task = data.tasks.find(t => t.id === id);
+      const task = data.tasks.find((t) => t.id === id);
       if (!task) return;
+      const prevStatus = task.status;
       task.status = col.id;
+      if (col.id === 'done' && prevStatus !== 'done') task.completedAt = Date.now();
+      if (col.id !== 'done') delete task.completedAt;
       if (col.id !== 'backlog') {
-        const colItems = data.tasks.filter(t => t.status === col.id && t.id !== id);
+        const colItems = data.tasks.filter((t) => t.status === col.id && t.id !== id);
         task.order = colItems.length;
       }
       markDirty();
       render();
     });
 
-    colTasks.forEach(task => {
+    colTasks.forEach((task) => {
       const card = document.createElement('div');
       card.className = 'card';
       card.draggable = true;
       card.dataset.id = task.id;
       card.dataset.priority = task.priority || 'none';
 
-      card.addEventListener('dragstart', e => {
+      card.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/plain', task.id);
         card.classList.add('dragging');
       });
       card.addEventListener('dragend', () => card.classList.remove('dragging'));
-      card.addEventListener('click', e => {
+      card.addEventListener('click', (e) => {
         if (e.target.closest('.card-actions')) return;
+        const tagEl = e.target.closest('.tag-clickable');
+        if (tagEl) {
+          e.stopPropagation();
+          toggleTagFilter(tagEl.dataset.col, tagEl.dataset.tag);
+          return;
+        }
         viewTask(task.id);
       });
 
-      const tagsHtml = (task.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+      const tagsHtml = (task.tags || []).map((t) => `<span class="tag tag-clickable" data-tag="${esc(t)}" data-col="${col.id}">${esc(t)}</span>`).join('');
       const effortHtml = task.effort ? `<span class="effort-badge">${task.effort}</span>` : '';
 
       card.innerHTML = `
@@ -346,7 +479,34 @@ function render() {
       body.appendChild(card);
     });
 
+    // Tag filter bar click handlers
+    colEl.querySelectorAll('.tag-filter-remove').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const badge = btn.closest('.tag-filter-badge');
+        toggleTagFilter(badge.dataset.col, badge.dataset.tag);
+      });
+    });
+    colEl.querySelectorAll('.tag-filter-clear').forEach((btn) => {
+      btn.addEventListener('click', () => clearTagFilters(btn.dataset.col));
+    });
+
     colEl.appendChild(body);
+
+    if (col.id === 'done' && hiddenDoneCount > 0) {
+      const btn = document.createElement('button');
+      btn.className = 'btn show-older-btn';
+      btn.textContent = `Show ${hiddenDoneCount} older`;
+      btn.onclick = () => { showAllDone = true; render(); };
+      colEl.appendChild(btn);
+    } else if (col.id === 'done' && showAllDone && data.tasks.filter((t) => t.status === 'done').length > 0) {
+      const btn = document.createElement('button');
+      btn.className = 'btn show-older-btn';
+      btn.textContent = 'Show recent only';
+      btn.onclick = () => { showAllDone = false; render(); };
+      colEl.appendChild(btn);
+    }
+
     board.appendChild(colEl);
   });
 }
@@ -354,7 +514,7 @@ function render() {
 // ── View Modal ──
 
 function viewTask(id) {
-  const t = data.tasks.find(x => x.id === id);
+  const t = data.tasks.find((x) => x.id === id);
   if (!t) return;
 
   document.getElementById('viewTitle').textContent = t.title;
@@ -364,23 +524,28 @@ function viewTask(id) {
   descEl.style.display = t.desc ? '' : 'none';
 
   const detailsEl = document.getElementById('viewDetails');
-  const colLabel = COLUMNS.find(c => c.id === t.status)?.title || t.status;
+  const colLabel = COLUMNS.find((c) => c.id === t.status)?.title || t.status;
   const fields = [];
   if (t.priority && t.priority !== 'none') fields.push({ label: 'Priority', html: priBadge(t.priority) });
   if (t.effort) fields.push({ label: 'Effort', html: `<span class="effort-badge">${esc(t.effort)}</span>` });
   if (t.due) fields.push({ label: 'Due', html: dueBadge(t.due) });
   fields.push({ label: 'Column', html: esc(colLabel) });
 
-  detailsEl.innerHTML = fields.map(f =>
-    `<div class="view-field"><span class="view-field-label">${f.label}</span><span class="view-field-value">${f.html}</span></div>`
-  ).join('');
+  detailsEl.innerHTML = fields
+    .map(
+      (f) => `<div class="view-field"><span class="view-field-label">${f.label}</span><span class="view-field-value">${f.html}</span></div>`
+    )
+    .join('');
 
   const tagsEl = document.getElementById('viewTags');
-  tagsEl.innerHTML = (t.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join('');
-  tagsEl.style.display = (t.tags && t.tags.length) ? '' : 'none';
+  tagsEl.innerHTML = (t.tags || []).map((tag) => `<span class="tag">${esc(tag)}</span>`).join('');
+  tagsEl.style.display = t.tags && t.tags.length ? '' : 'none';
 
   const editBtn = document.getElementById('viewEditBtn');
-  editBtn.onclick = () => { closeViewModal(); editTask(id); };
+  editBtn.onclick = () => {
+    closeViewModal();
+    editTask(id);
+  };
 
   document.getElementById('viewModal').classList.remove('hidden');
 }
@@ -395,12 +560,10 @@ function openModal(status, id) {
   editingId = id || null;
   const modal = document.getElementById('modal');
   const sel = document.getElementById('taskStatus');
-  sel.innerHTML = COLUMNS.map(c =>
-    `<option value="${c.id}" ${c.id === status ? 'selected' : ''}>${c.title}</option>`
-  ).join('');
+  sel.innerHTML = COLUMNS.map((c) => `<option value="${c.id}" ${c.id === status ? 'selected' : ''}>${c.title}</option>`).join('');
 
   if (id) {
-    const t = data.tasks.find(x => x.id === id);
+    const t = data.tasks.find((x) => x.id === id);
     document.getElementById('modalTitle').textContent = 'Edit Task';
     document.getElementById('modalSave').textContent = 'Save';
     document.getElementById('taskTitle').value = t.title;
@@ -416,12 +579,13 @@ function openModal(status, id) {
     document.getElementById('taskTitle').value = '';
     document.getElementById('taskDesc').value = '';
     document.getElementById('taskPriority').value = 'medium';
-    document.getElementById('taskEffort').value = 'M';
+    document.getElementById('taskEffort').value = '1';
     document.getElementById('taskDue').value = '';
     document.getElementById('taskTags').value = '';
   }
 
   modal.classList.remove('hidden');
+  setupTagAutocomplete();
   setTimeout(() => document.getElementById('taskTitle').focus(), 50);
 }
 
@@ -441,15 +605,24 @@ function saveTask() {
     effort: document.getElementById('taskEffort').value,
     due: document.getElementById('taskDue').value || null,
     status: document.getElementById('taskStatus').value,
-    tags: document.getElementById('taskTags').value.split(',').map(t => t.trim()).filter(Boolean),
+    tags: document
+      .getElementById('taskTags')
+      .value.split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
   };
 
   if (editingId) {
-    const t = data.tasks.find(x => x.id === editingId);
+    const t = data.tasks.find((x) => x.id === editingId);
+    const prevStatus = t.status;
     Object.assign(t, fields);
+    if (fields.status === 'done' && prevStatus !== 'done') t.completedAt = Date.now();
+    if (fields.status !== 'done') delete t.completedAt;
   } else {
-    const colItems = data.tasks.filter(t => t.status === fields.status);
-    data.tasks.push({ id: uid(), ...fields, order: colItems.length, created: Date.now() });
+    const colItems = data.tasks.filter((t) => t.status === fields.status);
+    const task = { id: uid(), ...fields, order: colItems.length, created: Date.now() };
+    if (fields.status === 'done') task.completedAt = Date.now();
+    data.tasks.push(task);
   }
 
   markDirty();
@@ -458,27 +631,128 @@ function saveTask() {
 }
 
 function editTask(id) {
-  const t = data.tasks.find(x => x.id === id);
+  const t = data.tasks.find((x) => x.id === id);
   if (t) openModal(t.status, id);
 }
 
 function deleteTask(id) {
   if (!confirm('Delete this task?')) return;
-  data.tasks = data.tasks.filter(t => t.id !== id);
+  data.tasks = data.tasks.filter((t) => t.id !== id);
   markDirty();
   render();
 }
 
+// ── Tag Auto-complete ──
+
+function setupTagAutocomplete() {
+  const input = document.getElementById('taskTags');
+  if (input.dataset.acReady) return;
+  input.dataset.acReady = '1';
+
+  const dropdown = document.createElement('div');
+  dropdown.id = 'tagAutocomplete';
+  dropdown.className = 'tag-autocomplete hidden';
+  input.parentNode.style.position = 'relative';
+  input.parentNode.insertBefore(dropdown, input.nextSibling);
+
+  input.addEventListener('input', () => showTagSuggestions());
+  input.addEventListener('keydown', (e) => {
+    if (!dropdown.classList.contains('hidden')) {
+      const items = dropdown.querySelectorAll('.tag-suggestion');
+      const active = dropdown.querySelector('.tag-suggestion.active');
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        let idx = [...items].indexOf(active);
+        if (active) active.classList.remove('active');
+        if (e.key === 'ArrowDown') idx = (idx + 1) % items.length;
+        else idx = (idx - 1 + items.length) % items.length;
+        items[idx].classList.add('active');
+      } else if (e.key === 'Enter' && active) {
+        e.preventDefault();
+        e.stopPropagation();
+        insertTag(active.textContent);
+      } else if (e.key === 'Escape') {
+        dropdown.classList.add('hidden');
+      }
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => dropdown.classList.add('hidden'), 150);
+  });
+  input.addEventListener('focus', () => showTagSuggestions());
+}
+
+function showTagSuggestions() {
+  const input = document.getElementById('taskTags');
+  const dropdown = document.getElementById('tagAutocomplete');
+  if (!dropdown) return;
+
+  const val = input.value;
+  const cursorPos = input.selectionStart;
+  const beforeCursor = val.slice(0, cursorPos);
+  const lastComma = beforeCursor.lastIndexOf(',');
+  const currentToken = beforeCursor.slice(lastComma + 1).trim().toLowerCase();
+
+  if (!currentToken) {
+    dropdown.classList.add('hidden');
+    return;
+  }
+
+  const existingTags = val.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const allTags = getAllTags();
+  const matches = allTags.filter(
+    (t) => t.toLowerCase().includes(currentToken) && !existingTags.includes(t.toLowerCase())
+  );
+
+  if (matches.length === 0) {
+    dropdown.classList.add('hidden');
+    return;
+  }
+
+  dropdown.innerHTML = matches
+    .slice(0, 8)
+    .map((t) => `<div class="tag-suggestion">${esc(t)}</div>`)
+    .join('');
+  dropdown.classList.remove('hidden');
+
+  dropdown.querySelectorAll('.tag-suggestion').forEach((el) => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      insertTag(el.textContent);
+    });
+  });
+}
+
+function insertTag(tag) {
+  const input = document.getElementById('taskTags');
+  const dropdown = document.getElementById('tagAutocomplete');
+  const val = input.value;
+  const cursorPos = input.selectionStart;
+  const beforeCursor = val.slice(0, cursorPos);
+  const afterCursor = val.slice(cursorPos);
+  const lastComma = beforeCursor.lastIndexOf(',');
+  const before = lastComma >= 0 ? beforeCursor.slice(0, lastComma + 1) + ' ' : '';
+  const nextComma = afterCursor.indexOf(',');
+  const after = nextComma >= 0 ? afterCursor.slice(nextComma) : '';
+  input.value = before + tag + (after ? after : ', ');
+  input.focus();
+  const newPos = (before + tag + ', ').length;
+  input.setSelectionRange(newPos, newPos);
+  dropdown.classList.add('hidden');
+}
+
 // ── Keyboard shortcuts ──
 
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeModal();
     closeViewModal();
     document.getElementById('settingsPanel').classList.add('hidden');
   }
   if (e.key === 'Enter' && !document.getElementById('modal').classList.contains('hidden')) {
-    if (e.target.tagName !== 'TEXTAREA') saveTask();
+    const ac = document.getElementById('tagAutocomplete');
+    if (e.target.tagName !== 'TEXTAREA' && (!ac || ac.classList.contains('hidden'))) saveTask();
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
@@ -487,7 +761,7 @@ document.addEventListener('keydown', e => {
 });
 
 // Close settings when clicking outside
-document.addEventListener('click', e => {
+document.addEventListener('click', (e) => {
   const panel = document.getElementById('settingsPanel');
   if (!panel.classList.contains('hidden') && !panel.contains(e.target) && !e.target.closest('[onclick*="toggleSettings"]')) {
     panel.classList.add('hidden');
@@ -495,5 +769,34 @@ document.addEventListener('click', e => {
 });
 
 // ── Init ──
-renderSortRules();
-render();
+
+async function init() {
+  // Load from localStorage (instant, always available)
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      loadJSON(saved);
+    } catch {
+      /* corrupted localStorage, start fresh */
+    }
+  }
+
+  // Try to restore file handle from IndexedDB
+  try {
+    const handle = await restoreHandle();
+    if (handle) {
+      const perm = await handle.requestPermission({ mode: 'readwrite' });
+      if (perm === 'granted') {
+        fileHandle = handle;
+        updateFileStatus(handle.name);
+      }
+    }
+  } catch {
+    /* handle restore failed, localStorage still works */
+  }
+
+  renderSortRules();
+  render();
+}
+
+init();
