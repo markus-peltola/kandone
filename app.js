@@ -312,6 +312,20 @@ function esc(s) {
   return d.innerHTML;
 }
 
+DOMPurify.addHook('afterSanitizeAttributes', function (node) {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return esc(text);
+  const rawHtml = marked.parse(text, { breaks: true });
+  return DOMPurify.sanitize(rawHtml);
+}
+
 function formatDate(isoDate) {
   const [y, m, d] = isoDate.split('-');
   return `${d}/${m}/${y}`;
@@ -450,6 +464,7 @@ function render() {
       card.addEventListener('dragend', () => card.classList.remove('dragging'));
       card.addEventListener('click', (e) => {
         if (e.target.closest('.card-actions')) return;
+        if (e.target.closest('a')) return;
         const tagEl = e.target.closest('.tag-clickable');
         if (tagEl) {
           e.stopPropagation();
@@ -468,7 +483,7 @@ function render() {
           <button class="card-btn del" onclick="deleteTask('${task.id}')" title="Delete">✕</button>
         </div>
         <div class="card-title">${esc(task.title)}</div>
-        ${task.desc ? `<div class="card-desc">${esc(task.desc)}</div>` : ''}
+        ${task.desc ? `<div class="card-desc">${renderMarkdown(task.desc)}</div>` : ''}
         <div class="card-meta">
           ${priBadge(task.priority)}
           ${dueBadge(task.due)}
@@ -520,7 +535,7 @@ function viewTask(id) {
   document.getElementById('viewTitle').textContent = t.title;
 
   const descEl = document.getElementById('viewDesc');
-  descEl.textContent = t.desc || '';
+  descEl.innerHTML = t.desc ? renderMarkdown(t.desc) : '';
   descEl.style.display = t.desc ? '' : 'none';
 
   const detailsEl = document.getElementById('viewDetails');
